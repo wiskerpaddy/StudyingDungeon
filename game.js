@@ -1,0 +1,360 @@
+// --- 1. 変数宣言とBGM制御 ---
+let bgmIndex = 0;
+let bgmNextTime = 0;
+let isMuted = false;
+let bgmTimer = null;
+let audioCtx = null;
+
+function playBGM() {
+    if (isMuted || !audioCtx) return;
+
+    const now = audioCtx.currentTime;
+    if (bgmNextTime < now) bgmNextTime = now;
+
+    // --- 階層による曲の切り替え ---
+    // 現在の階が最大階層(MAX_DEPTH)ならボス曲、それ以外なら通常曲を選択
+    const isBossFloor = (gameState.depth === CONFIG.MAX_DEPTH);
+    const track = isBossFloor ? SOUND_DATA.BGM_BOSS : SOUND_DATA.BGM_TRACK;
+    
+    // インデックスが配列外にならないよう調整
+    const note = track[bgmIndex % track.length];
+    
+    // ボス戦中（ボスがまだ生きている）なら、さらにテンポを速く、音を激しくする
+    const isBossAlive = gameState.monsters.some(m => m.isBoss);
+    const currentDur = isBossAlive ? note.dur / 2 : note.dur;
+    const currentType = isBossAlive ? 'sawtooth' : 'triangle';
+
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.type = currentType; 
+    osc.frequency.setValueAtTime(note.freq, bgmNextTime);
+    
+    gain.gain.setValueAtTime(0.03, bgmNextTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, bgmNextTime + currentDur);
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.start(bgmNextTime);
+    osc.stop(bgmNextTime + currentDur);
+
+    bgmNextTime += currentDur;
+    // track.length を使うことで、曲の長さに合わせてループ
+    bgmIndex = (bgmIndex + 1) % track.length;
+
+    bgmTimer = setTimeout(playBGM, currentDur * 1000);
+}
+
+function toggleMute() {
+    isMuted = !isMuted;
+    const btn = document.getElementById('mute-btn');
+    btn.textContent = isMuted ? "🔇" : "🔊";
+    if (isMuted) { clearTimeout(bgmTimer); } 
+    else { bgmNextTime = audioCtx ? audioCtx.currentTime : 0; playBGM(); }
+}
+
+// --- 2. ゲームの状態管理 ---
+let curLang = 'en';
+let gameState = { 
+    depth: 1, player: {}, map: [], explored: [], monsters: [], log: [], 
+    gameOver: false, initialized: false 
+};
+
+// --- 3. システム関数 (言語・音効) ---
+function setLang(lang) {
+    curLang = lang;
+    const T = i18n[curLang];
+    document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+    const activeBtn = document.getElementById(`btn-${lang}`);
+    if(activeBtn) activeBtn.classList.add('active');
+    const waitBtn = document.getElementById('wait');
+    waitBtn.textContent = T.wait;
+    waitBtn.style.fontSize = T.wait.length > 5 ? "10px" : "14px";
+    document.getElementById('skill').innerHTML = `${T.warpBtn}<br>(HP-5)`;
+    document.getElementById('g-title').textContent = T.gTitle;
+    document.getElementById('g-body').innerHTML = T.gBody;
+    if (gameState.initialized) draw();
+}
+
+function playEffect(data) {
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const sounds = Array.isArray(data) ? data : [data];
+    sounds.forEach(s => {
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = s.type;
+        osc.frequency.setValueAtTime(s.freq, audioCtx.currentTime);
+        osc.frequency.exponentialRampToValueAtTime(s.freq * 0.8, audioCtx.currentTime + s.dur);
+        gain.gain.setValueAtTime(s.gain || 0.1, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + s.dur);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + s.dur);
+    });
+}
+
+// --- 4. 初期化とレベル生成 ---
+function init() {
+    gameState.player = { x: 0, y: 0, hp: 30, maxHp: 30, atk: 6, exp: 0, lv: 1, nextExp: 15, vision: 4 };
+    gameState.depth = 1; gameState.log = []; gameState.gameOver = false;
+    addLog('start', 'log-system');
+    setupLevel();
+    gameState.initialized = true;
+}
+
+function findEmptyFloor() {
+    let x, y;
+    do {
+        x = Math.floor(Math.random() * CONFIG.MAP_W);
+        y = Math.floor(Math.random() * CONFIG.MAP_H);
+    } while (gameState.map[y][x] !== CONFIG.TILES.FLOOR);
+    return { x, y };
+}
+
+function setupLevel() {
+    const T = CONFIG.TILES;
+    gameState.map = Array.from({length: CONFIG.MAP_H }, () => Array(CONFIG.MAP_W).fill(T.WALL));
+    for (let y = 1; y < CONFIG.MAP_H - 1; y++) {
+        for (let x = 1; x < CONFIG.MAP_W - 1; x++) {
+            if (Math.random() > 0.18) gameState.map[y][x] = T.FLOOR;
+        }
+    }
+    gameState.explored = Array.from({ length: CONFIG.MAP_H }, () => Array(CONFIG.MAP_W).fill(false));
+    gameState.monsters = [];
+    const pPos = findEmptyFloor();
+    gameState.player.x = pPos.x; gameState.player.y = pPos.y;
+
+    const exitPos = findEmptyFloor();
+    if (gameState.depth < CONFIG.MAX_DEPTH) {
+        gameState.map[exitPos.y][exitPos.x] = T.STAIRS;
+    } else {
+        gameState.monsters.push({ isBoss: true, tile: T.BOSS, hp: 80, atk: 15, color: CONFIG.APPEARANCE.BOSS.color, x: exitPos.x, y: exitPos.y });
+        gameState.map[exitPos.y][exitPos.x] = T.BOSS;
+        addLog('bossNear', 'log-boss');
+    }
+
+    for (let i = 0; i < 3 + gameState.depth; i++) {
+        const mPos = findEmptyFloor();
+        const typeIdx = Math.min(gameState.depth - 1, 2);
+        gameState.monsters.push({ typeIndex: typeIdx, tile: ['r','A','e'][typeIdx], hp: 10 * gameState.depth, atk: 3 * gameState.depth, color: CONFIG.APPEARANCE.MONSTER.color, x: mPos.x, y: mPos.y });
+        gameState.map[mPos.y][mPos.x] = T.MONSTER_GENERIC;
+    }
+    const itemPos = findEmptyFloor();
+    gameState.map[itemPos.y][itemPos.x] = T.POTION;
+    updateVision();
+    draw();
+}
+
+// --- 5. 描画ロジック ---
+function getTileDisplay(x, y, isVisible) {
+    const p = gameState.player;
+    const APP = CONFIG.APPEARANCE;
+    const TILE = CONFIG.TILES;
+    if (x === p.x && y === p.y) return { c: TILE.PLAYER, color: APP.PLAYER.color };
+    if (!isVisible) {
+        if (gameState.explored[y][x]) {
+            const t = gameState.map[y][x];
+            const isEntity = (t === TILE.MONSTER_GENERIC || t === TILE.BOSS || t === TILE.POTION);
+            return { c: isEntity ? TILE.FLOOR : t, color: APP.EXPLORED_SHADOW.color };
+        }
+        return { c: ' ', color: APP.UNEXPLORED.color };
+    }
+    const tile = gameState.map[y][x];
+    if (tile === TILE.MONSTER_GENERIC || tile === TILE.BOSS) {
+        const m = gameState.monsters.find(m => m.x === x && m.y === y);
+        return { c: m ? m.tile : tile, color: m ? m.color : (tile === TILE.BOSS ? APP.BOSS.color : APP.MONSTER.color) };
+    }
+    const tileColors = { [TILE.WALL]: APP.WALL.color, [TILE.POTION]: APP.POTION.color, [TILE.STAIRS]: APP.STAIRS.color, [TILE.FLOOR]: APP.FLOOR.color };
+    return { c: tile, color: tileColors[tile] || APP.FLOOR.color };
+}
+
+function draw() {
+    const screen = document.getElementById('screen');
+    if (!screen) return;
+
+    const T = i18n[curLang];
+    const p = gameState.player;
+    
+    // HUD（ステータス）部分
+    let hud = `Lv:${p.lv}  ${T.hp}:${p.hp}/${p.maxHp}  ${T.atk}:${p.atk}  ${T.floor}:${gameState.depth}\n\n`;
+    
+    let view = "";
+    for (let y = 0; y < CONFIG.MAP_H; y++) {
+        for (let x = 0; x < CONFIG.MAP_W; x++) {
+            // 視界の計算（三平方の定理）
+            const isVisible = Math.sqrt((x - p.x)**2 + (y - p.y)**2) <= p.vision;
+            const info = getTileDisplay(x, y, isVisible);
+            
+            // 記号を色付きのspanで囲む
+            view += `<span style="color:${info.color};">${info.c}</span>`;
+        }
+        view += "\n"; // 行末で改行
+    }
+    
+    // innerHTML を使うことで <span> タグを有効化
+    screen.innerHTML = hud + view;
+    
+    updateLogUI(T);
+}
+
+// --- 6. アクションとターン処理 ---
+function handleInput(dx, dy) {
+    if (gameState.gameOver || isGuideOpen()) return;
+    const nx = gameState.player.x + dx, ny = gameState.player.y + dy;
+    const tile = gameState.map[ny][nx];
+    if (tile === CONFIG.TILES.WALL) {
+        playEffect(SOUND_DATA.DUDGE_WALL);
+        addLog('wall', 'log-system');
+    } else if (tile === CONFIG.TILES.MONSTER_GENERIC || tile === CONFIG.TILES.BOSS) {
+        combat(nx, ny);
+    } else {
+        movePlayer(nx, ny, tile);
+    }
+    if (!gameState.gameOver) {
+        monstersTurn();
+        updateVision(); 
+        draw();
+    }
+}
+
+function movePlayer(nx, ny, tile) {
+    const T = CONFIG.TILES;
+    gameState.player.x = nx; gameState.player.y = ny;
+    if (tile === T.POTION) {
+        playEffect(SOUND_DATA.HEAL);
+        gameState.player.hp = Math.min(gameState.player.maxHp, gameState.player.hp + CONFIG.HEAL_VAL);
+        addLog('potion', 'log-player');
+        gameState.map[ny][nx] = T.FLOOR;
+    } else if (tile === T.STAIRS) {
+        playEffect(SOUND_DATA.STAIRS);
+        gameState.depth++;
+        addLog('stairs', 'log-system', { d: gameState.depth });
+        setupLevel();
+    } else {
+        playEffect(SOUND_DATA.MOVE);
+    }
+}
+
+function combat(nx, ny) {
+    playEffect(SOUND_DATA.PLAYER_ATTACK);
+    const m = gameState.monsters.find(m => m.x === nx && m.y === ny);
+    const dmg = gameState.player.atk + Math.floor(Math.random()*5);
+    m.hp -= dmg;
+    addLog('attack', 'log-player', { nIsMonster: true, monsterObj: m, dmg: dmg });
+    if (m.hp <= 0) {
+        playEffect(SOUND_DATA.DEFEATED);
+        addLog('defeat', 'log-system', { nIsMonster: true, monsterObj: m });
+        gameState.map[ny][nx] = CONFIG.TILES.FLOOR;
+        gameState.monsters = gameState.monsters.filter(mon => mon !== m);
+        if (m.isBoss) return endGame(true);
+        checkLvUp();
+    }
+}
+
+function monstersTurn() {
+    gameState.monsters.forEach(m => {
+        const dx = Math.abs(gameState.player.x - m.x), dy = Math.abs(gameState.player.y - m.y);
+        if (dx + dy === 1) {
+            const dmg = Math.max(1, m.atk - Math.floor(Math.random()*3));
+            gameState.player.hp -= dmg;
+            playEffect(m.isBoss ? SOUND_DATA.BOSS_ATTACK : SOUND_DATA.ENEMY_ATTACK);
+            addLog('damaged', 'log-enemy', { nIsMonster: true, monsterObj: m, dmg: dmg });
+            if (gameState.player.hp <= 0) endGame(false);
+        } else {
+            moveMonsterRandomly(m);
+        }
+    });
+}
+
+function moveMonsterRandomly(m) {
+    const T = CONFIG.TILES;
+    const dx = gameState.player.x - m.x, dy = gameState.player.y - m.y;
+    let mx = 0, my = 0;
+    if (Math.abs(dx) > Math.abs(dy)) { mx = dx > 0 ? 1 : -1; } 
+    else { my = dy > 0 ? 1 : -1; }
+    const tx = m.x + mx, ty = m.y + my;
+    if (gameState.map[ty][tx] === T.FLOOR && !(tx === gameState.player.x && ty === gameState.player.y)) {
+        gameState.map[m.y][m.x] = T.FLOOR; m.x = tx; m.y = ty;
+        gameState.map[m.y][m.x] = m.isBoss ? T.BOSS : T.MONSTER_GENERIC;
+    }
+}
+
+function useSkill() {
+    if (gameState.player.hp > CONFIG.WARP_COST && !gameState.gameOver) {
+        gameState.player.hp -= CONFIG.WARP_COST;
+        
+        // 画面を一瞬白く光らせる演出（CSSでscreenの背景色を一時的に変えるなど）
+        const screen = document.getElementById('screen');
+        screen.style.backgroundColor = '#444'; 
+        setTimeout(() => { screen.style.backgroundColor = '#000'; }, 50);
+
+        playEffect(SOUND_DATA.WARP);
+        addLog('warp', 'log-system');
+
+        const pos = findEmptyFloor();
+        gameState.player.x = pos.x; gameState.player.y = pos.y;
+        playEffect(SOUND_DATA.WARP); addLog('warp', 'log-system');
+        monstersTurn(); updateVision(); draw();
+    }
+}
+
+function checkLvUp() {
+    const p = gameState.player; p.exp += 10;
+    if (p.exp >= p.nextExp) {
+        playEffect(SOUND_DATA.LEVEL_UP);
+        p.lv++; p.maxHp += 10; p.hp = p.maxHp; p.atk += 4; p.exp = 0;
+        addLog('lvup', 'log-lvup', { l: p.lv });
+    }
+}
+
+function updateVision() {
+    for (let y = 0; y < CONFIG.MAP_H; y++) 
+        for (let x = 0; x < CONFIG.MAP_W; x++)
+            if (Math.sqrt((x-gameState.player.x)**2 + (y-gameState.player.y)**2) <= gameState.player.vision)
+                gameState.explored[y][x] = true;
+}
+
+// --- 7. UI制御とイベント ---
+function addLog(key, type, params = {}) { gameState.log.push({ key, type, params }); }
+function updateLogUI(T) {
+    const logDiv = document.getElementById('log');
+    logDiv.innerHTML = "";
+    gameState.log.slice(-4).forEach(entry => {
+        let msg = T[entry.key] || entry.key;
+        if (entry.params.nIsMonster) {
+            const m = entry.params.monsterObj;
+            msg = msg.replace(`{n}`, m.isBoss ? T.bName : T.mNames[m.typeIndex]);
+        }
+        Object.keys(entry.params).forEach(k => msg = msg.replace(`{${k}}`, entry.params[k]));
+        const d = document.createElement('div'); d.className = entry.type; d.textContent = msg;
+        logDiv.appendChild(d);
+    });
+}
+
+function isGuideOpen() { return document.getElementById('guide-overlay').style.display === 'flex'; }
+function openGuide() { document.getElementById('guide-overlay').style.display = 'flex'; if (bgmTimer) { clearTimeout(bgmTimer); bgmTimer = null; } }
+function closeGuide() { 
+    document.getElementById('guide-overlay').style.display = 'none';
+    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    audioCtx.resume().then(() => {
+        playEffect(SOUND_DATA.START_GAME);
+        if (!bgmTimer && !isMuted) { playBGM(); }
+    });
+    if(!gameState.initialized) init();
+}
+
+function endGame(win) { gameState.gameOver = true; alert(win ? i18n[curLang].win : i18n[curLang].lose); location.reload(); }
+
+window.addEventListener('keydown', (e) => {
+    const keys = { 'ArrowUp': [0,-1], 'w': [0,-1], '8': [0,-1], 'ArrowDown': [0,1], 's': [0,1], '2': [0,1], 'ArrowLeft': [-1,0], 'a': [-1,0], '4': [-1,0], 'ArrowRight': [1,0], 'd': [1,0], '6': [1,0], ' ': [0,0], '5': [0,0] };
+    if (keys[e.key]) handleInput(...keys[e.key]);
+});
+
+window.onload = () => {
+    const browserLang = (navigator.language || navigator.userLanguage).split('-')[0];
+    setLang(['ja', 'en', 'es'].includes(browserLang) ? browserLang : 'en');
+    openGuide();
+};
