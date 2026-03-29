@@ -58,7 +58,8 @@ function toggleMute() {
 let curLang = 'en';
 let gameState = { 
     depth: 1, player: {}, map: [], explored: [], monsters: [], log: [], 
-    gameOver: false, initialized: false 
+    gameOver: false, initialized: false,
+    collection: {}, // { "DNS": 1, "HTTP": 3 } のように記録
 };
 
 // --- 3. システム関数 (言語・音効) ---
@@ -103,6 +104,8 @@ function init() {
     addLog('start', 'log-system');
     setupLevel();
     gameState.initialized = true;
+    gameState.collection = {}; // リセット
+    updateCollectionUI(); // UIを空にする
 }
 
 function findEmptyFloor() {
@@ -270,6 +273,15 @@ function combat(nx, ny) {
     addLog('attack', 'log-player', { nIsMonster: true, monsterObj: m, dmg: dmg });
 
     if (m.hp <= 0) {
+        // --- コレクションに追加 ---
+        const word = m.studyText;
+        if (!gameState.collection[word]) {
+            gameState.collection[word] = 0;
+        }
+        gameState.collection[word]++;
+        
+        // UIを更新
+        updateCollectionUI();
         playEffect(SOUND_DATA.DEFEATED);
         // 倒した時も「正解！」というニュアンスのログを出すと達成感が出ます
         addLog('defeat', 'log-system', { nIsMonster: true, monsterObj: m });
@@ -431,4 +443,23 @@ async function loadStudyData() {
     } catch (e) {
         console.warn("暗記データの読み込みに失敗。デフォルト設定で続行します。");
     }
+}
+
+// 表示を更新する関数
+function updateCollectionUI() {
+    const listDiv = document.getElementById('collection-list');
+    if (!listDiv) return;
+
+    listDiv.innerHTML = "";
+    // 倒した数が多い順、あるいは見つけた順に表示
+    Object.keys(gameState.collection).forEach(word => {
+        const count = gameState.collection[word];
+        const span = document.createElement('span');
+        span.style.border = "1px solid #0a0";
+        span.style.padding = "2px 5px";
+        span.style.borderRadius = "3px";
+        // 1回倒したら表示、複数回倒すと (x2) と出るイメージ
+        span.textContent = `${word}${count > 1 ? ' x' + count : ''}`;
+        listDiv.appendChild(span);
+    });
 }

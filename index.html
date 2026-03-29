@@ -18,16 +18,20 @@
             </div>
             <div class="help-circle" onclick="openGuide()">?</div>
         </div>
-
         <div id="guide-overlay" onclick="closeGuide()">
             <div class="guide-title" id="g-title"></div>
             <div class="guide-text" id="g-body"></div>
             <div style="font-size:11px; color:#888;">Tap to Start / 画面をタップして開始</div>
         </div>
 
-        <div id="screen"></div>
+        <div id="main-area">
+            <div id="screen"></div>
+            <div id="collection-container">
+                <div id="collection-header">【習得 / Collection】</div>
+                <div id="collection-list"></div>
+            </div>
+        </div>
         <div id="log"></div>
-        
         <div id="controls">
             <div class="btn" id="up" onclick="handleInput(0, -1)">↑</div>
             <div class="btn" id="skill" onclick="useSkill()">WARP</div>
