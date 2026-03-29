@@ -39,5 +39,12 @@
     </div>
     <script src="config.js"></script>
     <script src="game.js"></script>
+    <script>
+        // ページ読み込み時にデータ取得 -> ゲーム開始
+        window.onload = async () => {
+            await loadStudyData();
+            initGame(); // ゲームのメインループ開始関数
+        };
+    </script>
 </body>
 </html>

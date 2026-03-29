@@ -139,8 +139,23 @@ function setupLevel() {
     for (let i = 0; i < 3 + gameState.depth; i++) {
         const mPos = findEmptyFloor();
         const typeIdx = Math.min(gameState.depth - 1, 2);
-        gameState.monsters.push({ typeIndex: typeIdx, tile: ['r','A','e'][typeIdx], hp: 10 * gameState.depth, atk: 3 * gameState.depth, color: CONFIG.APPEARANCE.MONSTER.color, x: mPos.x, y: mPos.y });
-        gameState.map[mPos.y][mPos.x] = T.MONSTER_GENERIC;
+        
+        // --- 追加: 単語の選択 ---
+        const wordData = EXAM_WORDS[Math.floor(Math.random() * EXAM_WORDS.length)];
+        
+        gameState.monsters.push({ 
+            typeIndex: typeIdx, 
+            tile: ['r','A','e'][typeIdx], 
+            hp: 10 * gameState.depth, 
+            atk: 3 * gameState.depth, 
+            color: CONFIG.APPEARANCE.MONSTER.color, 
+            x: mPos.x, 
+            y: mPos.y,
+            // ここに追加
+            studyText: wordData.text,
+            studyHint: wordData.hint 
+        });
+        gameState.map[mPos.y][mPos.x] = CONFIG.TILES.MONSTER_GENERIC;
     }
     const itemPos = findEmptyFloor();
     gameState.map[itemPos.y][itemPos.x] = T.POTION;
@@ -165,7 +180,11 @@ function getTileDisplay(x, y, isVisible) {
     const tile = gameState.map[y][x];
     if (tile === TILE.MONSTER_GENERIC || tile === TILE.BOSS) {
         const m = gameState.monsters.find(m => m.x === x && m.y === y);
-        return { c: m ? m.tile : tile, color: m ? m.color : (tile === TILE.BOSS ? APP.BOSS.color : APP.MONSTER.color) };
+        if (m && !m.isBoss) {
+            // 敵の記号の横に単語を添える（例: r(TCP/IP) ）
+            return { c: `${m.tile}(${m.studyText})`, color: m.color };
+        }
+        return { c: m ? m.tile : tile, color: m ? m.color : APP.MONSTER.color };
     }
     const tileColors = { [TILE.WALL]: APP.WALL.color, [TILE.POTION]: APP.POTION.color, [TILE.STAIRS]: APP.STAIRS.color, [TILE.FLOOR]: APP.FLOOR.color };
     return { c: tile, color: tileColors[tile] || APP.FLOOR.color };
@@ -326,7 +345,9 @@ function updateLogUI(T) {
         let msg = T[entry.key] || entry.key;
         if (entry.params.nIsMonster) {
             const m = entry.params.monsterObj;
-            msg = msg.replace(`{n}`, m.isBoss ? T.bName : T.mNames[m.typeIndex]);
+            // モンスター名に studyText を優先的に使用
+            const mName = m.isBoss ? T.bName : (m.studyText || T.mNames[m.typeIndex]);
+            msg = msg.replace(`{n}`, mName);
         }
         Object.keys(entry.params).forEach(k => msg = msg.replace(`{${k}}`, entry.params[k]));
         const d = document.createElement('div'); d.className = entry.type; d.textContent = msg;
@@ -336,9 +357,13 @@ function updateLogUI(T) {
 
 function isGuideOpen() { return document.getElementById('guide-overlay').style.display === 'flex'; }
 function openGuide() { document.getElementById('guide-overlay').style.display = 'flex'; if (bgmTimer) { clearTimeout(bgmTimer); bgmTimer = null; } }
-function closeGuide() { 
+async function closeGuide() { 
     document.getElementById('guide-overlay').style.display = 'none';
     if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    
+    // 暗記データの読み込みを待機
+    await loadStudyData(); 
+
     audioCtx.resume().then(() => {
         playEffect(SOUND_DATA.START_GAME);
         if (!bgmTimer && !isMuted) { playBGM(); }
@@ -358,3 +383,19 @@ window.onload = () => {
     setLang(['ja', 'en', 'es'].includes(browserLang) ? browserLang : 'en');
     openGuide();
 };
+
+async function loadStudyData() {
+    if (!CONFIG.STUDY_MODE.enabled) return;
+
+    try {
+        const response = await fetch(CONFIG.STUDY_MODE.jsonPath);
+        if (!response.ok) throw new Error("JSON load failed");
+        
+        const data = await response.json();
+        // グローバル変数にセット
+        EXAM_WORDS = data; 
+        console.log("OCRデータをロードしました:", EXAM_WORDS);
+    } catch (e) {
+        console.warn("暗記データの読み込みに失敗。デフォルト設定で続行します。");
+    }
+}

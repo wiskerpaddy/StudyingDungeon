@@ -9,6 +9,14 @@ const CONFIG = {
     WARP_COST: 5,   // ワープスキル使用時のHP消費量
     HEAL_VAL: 12,    // 回復アイテム(L)の回復量
 
+    // --- 追加: 暗記モード設定 ---
+    STUDY_MODE: {
+        enabled: true,          // 暗記モードのON/OFF
+        jsonPath: "./words.json", // OCRデータファイルのパス
+        font: "12px 'Courier New', monospace",
+        enemyColor: "#ffaaaa",  // 単語を表示する敵の色
+    },
+
 // タイルやエンティティの記号定義
     TILES: {
         PLAYER: '@',
@@ -202,3 +210,8 @@ const SOUND_DATA = {
         { freq: 103.83, dur: 0.8 }  // 低い G#
     ],
 };
+
+// OCRデータが読み込まれるまでのフォールバック用変数
+let EXAM_WORDS = [
+    { text: "Reading...", hint: "Please wait" }
+];
