@@ -68,7 +68,11 @@ const i18n = {
         mNames: ["ノイズ・ラット", "不協和音の鎧", "沈黙の眼"], 
         bName: "古の指揮者",
         win: "伝説の奏者となった！", 
-        lose: "音が途絶えた..."
+        lose: "音が途絶えた...",
+        question: "【暗記】{studyText} とは？ → {studyHint}",
+        // 攻撃されたときは「正体」だけを明かす
+        enemyAttack: "【！】{studyText} の先制攻撃！ ({firstChar}...) とは？",        // 自分が攻撃したときだけ「答え」を出す
+        checkAnswer: "【確認】{studyText} ⇒ {studyHint}",
     },
     /* 英語定義 */
     en: {
@@ -92,7 +96,9 @@ const i18n = {
         mNames: ["Noise Rat", "Discord Armor", "Silent Eye"], 
         bName: "Ancient Conductor",
         win: "Legend Soloist!", 
-        lose: "Music stopped..."
+        lose: "Music stopped...",
+        enemyAttack: "[!] {studyText} attacks! ({firstChar}...) is ？",
+        checkAnswer: "[CHECK] {studyText} => {studyHint}",
     },
         /* スペイン語定義 */
     es: {
@@ -116,7 +122,10 @@ const i18n = {
         mNames: ["Rata Ruido", "Armadura Discord", "Ojo Silencio"], 
         bName: "Director Antiguo",
         win: "¡Solista de leyenda!", 
-        lose: "Música detenida..."
+        lose: "Música detenida...",
+        question: "【MEMORIZAR】 ¿Qué es {studyText}? → {studyHint}",
+        enemyAttack: "¡{studyText} te ataca! ({firstChar}...) es ？",
+        checkAnswer: "[REVISAR] {studyText} => {studyHint}",
     }
 };
 
@@ -211,7 +220,7 @@ const SOUND_DATA = {
     ],
 };
 
-// OCRデータが読み込まれるまでのフォールバック用変数
-let EXAM_WORDS = [
-    { text: "Reading...", hint: "Please wait" }
-];
+// もし未定義なら空配列で初期化する、という書き方
+if (typeof EXAM_WORDS === 'undefined') {
+    var EXAM_WORDS = [{ text: "Default", hint: "Fallback" }];
+}

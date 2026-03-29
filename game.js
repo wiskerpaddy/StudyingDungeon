@@ -178,12 +178,10 @@ function getTileDisplay(x, y, isVisible) {
         return { c: ' ', color: APP.UNEXPLORED.color };
     }
     const tile = gameState.map[y][x];
+    // getTileDisplay 内のモンスター表示部分を修正
     if (tile === TILE.MONSTER_GENERIC || tile === TILE.BOSS) {
         const m = gameState.monsters.find(m => m.x === x && m.y === y);
-        if (m && !m.isBoss) {
-            // 敵の記号の横に単語を添える（例: r(TCP/IP) ）
-            return { c: `${m.tile}(${m.studyText})`, color: m.color };
-        }
+        // 記号 (m.tile) だけを返すように戻す
         return { c: m ? m.tile : tile, color: m ? m.color : APP.MONSTER.color };
     }
     const tileColors = { [TILE.WALL]: APP.WALL.color, [TILE.POTION]: APP.POTION.color, [TILE.STAIRS]: APP.STAIRS.color, [TILE.FLOOR]: APP.FLOOR.color };
@@ -203,19 +201,19 @@ function draw() {
     let view = "";
     for (let y = 0; y < CONFIG.MAP_H; y++) {
         for (let x = 0; x < CONFIG.MAP_W; x++) {
-            // 視界の計算（三平方の定理）
+            // 視界の計算
             const isVisible = Math.sqrt((x - p.x)**2 + (y - p.y)**2) <= p.vision;
+            
+            // ここがポイント：infoはオブジェクト
             const info = getTileDisplay(x, y, isVisible);
             
-            // 記号を色付きのspanで囲む
+            // info.c (文字) と info.color (色) を使って組み立てる
             view += `<span style="color:${info.color};">${info.c}</span>`;
         }
-        view += "\n"; // 行末で改行
+        view += "\n"; 
     }
     
-    // innerHTML を使うことで <span> タグを有効化
     screen.innerHTML = hud + view;
-    
     updateLogUI(T);
 }
 
@@ -257,15 +255,25 @@ function movePlayer(nx, ny, tile) {
     }
 }
 
+// --- 6. アクションとターン処理 --- の combat 関数を修正
 function combat(nx, ny) {
     playEffect(SOUND_DATA.PLAYER_ATTACK);
     const m = gameState.monsters.find(m => m.x === nx && m.y === ny);
+    
+    // --- 追加：攻撃した瞬間に「答え」をログに出す ---
+    // これにより、ぶつかるまで答えが見えない「暗記カード」状態になります
+    addLog('checkAnswer', 'log-system', { studyText: m.studyText, studyHint: m.studyHint });
+
     const dmg = gameState.player.atk + Math.floor(Math.random()*5);
     m.hp -= dmg;
+    
     addLog('attack', 'log-player', { nIsMonster: true, monsterObj: m, dmg: dmg });
+
     if (m.hp <= 0) {
         playEffect(SOUND_DATA.DEFEATED);
+        // 倒した時も「正解！」というニュアンスのログを出すと達成感が出ます
         addLog('defeat', 'log-system', { nIsMonster: true, monsterObj: m });
+        
         gameState.map[ny][nx] = CONFIG.TILES.FLOOR;
         gameState.monsters = gameState.monsters.filter(mon => mon !== m);
         if (m.isBoss) return endGame(true);
@@ -280,7 +288,14 @@ function monstersTurn() {
             const dmg = Math.max(1, m.atk - Math.floor(Math.random()*3));
             gameState.player.hp -= dmg;
             playEffect(m.isBoss ? SOUND_DATA.BOSS_ATTACK : SOUND_DATA.ENEMY_ATTACK);
-            addLog('damaged', 'log-enemy', { nIsMonster: true, monsterObj: m, dmg: dmg });
+            
+            // --- ここをカスタマイズ ---
+            // ログに「問題」として単語とヒントを出す
+            addLog('enemyAttack', 'log-enemy', { 
+                studyText: m.studyText, 
+                firstChar: m.studyText.charAt(0), // 最初の1文字を渡す
+                dmg: dmg 
+            });            
             if (gameState.player.hp <= 0) endGame(false);
         } else {
             moveMonsterRandomly(m);
@@ -343,14 +358,23 @@ function updateLogUI(T) {
     logDiv.innerHTML = "";
     gameState.log.slice(-4).forEach(entry => {
         let msg = T[entry.key] || entry.key;
+        
+        // --- モンスター名の置換処理 ---
         if (entry.params.nIsMonster) {
             const m = entry.params.monsterObj;
-            // モンスター名に studyText を優先的に使用
             const mName = m.isBoss ? T.bName : (m.studyText || T.mNames[m.typeIndex]);
             msg = msg.replace(`{n}`, mName);
         }
-        Object.keys(entry.params).forEach(k => msg = msg.replace(`{${k}}`, entry.params[k]));
-        const d = document.createElement('div'); d.className = entry.type; d.textContent = msg;
+
+        // --- 全てのパラメータ（studyText, dmgなど）を一括置換する処理 ---
+        Object.keys(entry.params).forEach(k => {
+            // 例: msg 内の {studyText} を entry.params['studyText'] の値で書き換える
+            msg = msg.split(`{${k}}`).join(entry.params[k]);
+        });
+
+        const d = document.createElement('div'); 
+        d.className = entry.type; 
+        d.textContent = msg;
         logDiv.appendChild(d);
     });
 }
@@ -359,16 +383,25 @@ function isGuideOpen() { return document.getElementById('guide-overlay').style.d
 function openGuide() { document.getElementById('guide-overlay').style.display = 'flex'; if (bgmTimer) { clearTimeout(bgmTimer); bgmTimer = null; } }
 async function closeGuide() { 
     document.getElementById('guide-overlay').style.display = 'none';
-    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
     
-    // 暗記データの読み込みを待機
-    await loadStudyData(); 
+    // AudioContextの生成
+    if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+
+    // 1. まずゲームを初期化して描画してしまう（データ待ちで真っ白を防ぐ）
+    if(!gameState.initialized) init();
+
+    // 2. その後、非同期でデータを読み込み、終わったら再描画
+    try {
+        await loadStudyData();
+        setupLevel(); // データを反映させた状態でマップを再生成
+    } catch (e) {
+        console.error("Study data load failed, playing with defaults.");
+    }
 
     audioCtx.resume().then(() => {
         playEffect(SOUND_DATA.START_GAME);
         if (!bgmTimer && !isMuted) { playBGM(); }
     });
-    if(!gameState.initialized) init();
 }
 
 function endGame(win) { gameState.gameOver = true; alert(win ? i18n[curLang].win : i18n[curLang].lose); location.reload(); }
