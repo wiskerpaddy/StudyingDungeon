@@ -119,22 +119,51 @@ function findEmptyFloor() {
 
 function setupLevel() {
     const T = CONFIG.TILES;
-    gameState.map = Array.from({length: CONFIG.MAP_H }, () => Array(CONFIG.MAP_W).fill(T.WALL));
-    for (let y = 1; y < CONFIG.MAP_H - 1; y++) {
-        for (let x = 1; x < CONFIG.MAP_W - 1; x++) {
-            if (Math.random() > 0.18) gameState.map[y][x] = T.FLOOR;
+    const W = CONFIG.MAP_W;
+    const H = CONFIG.MAP_H;
+
+    // 1. 最初は全て「壁」で埋める
+    gameState.map = Array.from({length: H}, () => Array(W).fill(T.WALL));
+    gameState.explored = Array.from({length: H}, () => Array(W).fill(false));
+    gameState.monsters = [];
+
+    // 2. 穴掘り開始地点（プレイヤー初期位置）
+    let px = Math.floor(W / 2);
+    let py = Math.floor(H / 2);
+    gameState.player.x = px;
+    gameState.player.y = py;
+
+    // 3. ランダムウォークによる通路生成
+    // マップ全体の35%〜40%程度が床になるまで掘り進める
+    let floorCount = 0;
+    const targetFloor = Math.floor(W * H * 0.38); 
+
+    while (floorCount < targetFloor) {
+        if (gameState.map[py][px] === T.WALL) {
+            gameState.map[py][px] = T.FLOOR;
+            floorCount++;
+        }
+        
+        // 上下左右ランダムに移動
+        const dir = [[0, 1], [0, -1], [1, 0], [-1, 0]][Math.floor(Math.random() * 4)];
+        const nx = px + dir[0];
+        const ny = py + dir[1];
+
+        // 端から1マス以内には掘らない（外壁を維持）
+        if (nx > 0 && nx < W - 1 && ny > 0 && ny < H - 1) {
+            px = nx;
+            py = ny;
         }
     }
-    gameState.explored = Array.from({ length: CONFIG.MAP_H }, () => Array(CONFIG.MAP_W).fill(false));
-    gameState.monsters = [];
-    const pPos = findEmptyFloor();
-    gameState.player.x = pPos.x; gameState.player.y = pPos.y;
 
+    // 4. 以降の配置（階段、ボス、モンスター、アイテム）は既存と同じ
+    // 全て T.FLOOR の上に配置されるため、必ず到達可能になる
     const exitPos = findEmptyFloor();
     if (gameState.depth < CONFIG.MAX_DEPTH) {
         gameState.map[exitPos.y][exitPos.x] = T.STAIRS;
     } else {
-        gameState.monsters.push({ isBoss: true, tile: T.BOSS, hp: 80, atk: 15, color: CONFIG.APPEARANCE.BOSS.color, x: exitPos.x, y: exitPos.y });
+        const boss = { isBoss: true, tile: T.BOSS, hp: 80, atk: 15, color: CONFIG.APPEARANCE.BOSS.color, x: exitPos.x, y: exitPos.y };
+        gameState.monsters.push(boss);
         gameState.map[exitPos.y][exitPos.x] = T.BOSS;
         addLog('bossNear', 'log-boss');
     }
@@ -160,8 +189,10 @@ function setupLevel() {
         });
         gameState.map[mPos.y][mPos.x] = CONFIG.TILES.MONSTER_GENERIC;
     }
+    
     const itemPos = findEmptyFloor();
     gameState.map[itemPos.y][itemPos.x] = T.POTION;
+
     updateVision();
     draw();
 }
