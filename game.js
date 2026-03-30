@@ -108,11 +108,16 @@ function init() {
     updateCollectionUI(); // UIを空にする
 }
 
+// 必ず「床」の座標を返す
 function findEmptyFloor() {
     let x, y;
+    let attempts = 0;
     do {
         x = Math.floor(Math.random() * CONFIG.MAP_W);
         y = Math.floor(Math.random() * CONFIG.MAP_H);
+        attempts++;
+        // 万が一のための無限ループ防止（1000回探してなければ現在の位置を返す）
+        if (attempts > 1000) return { x: gameState.player.x, y: gameState.player.y };
     } while (gameState.map[y][x] !== CONFIG.TILES.FLOOR);
     return { x, y };
 }
@@ -360,21 +365,33 @@ function moveMonsterRandomly(m) {
 }
 
 function useSkill() {
-    if (gameState.player.hp > CONFIG.WARP_COST && !gameState.gameOver) {
-        gameState.player.hp -= CONFIG.WARP_COST;
-        
-        // 画面を一瞬白く光らせる演出（CSSでscreenの背景色を一時的に変えるなど）
+    // HPが1以上あれば発動可能にする
+    if (gameState.player.hp > 0 && !gameState.gameOver) {
+        // 現在のHPの20%を計算（端数切り上げ）
+        const cost = Math.ceil(gameState.player.hp * 0.2);
+        gameState.player.hp -= cost;
+
+        // 演出：画面をフラッシュさせる
         const screen = document.getElementById('screen');
         screen.style.backgroundColor = '#444'; 
         setTimeout(() => { screen.style.backgroundColor = '#000'; }, 50);
 
+        // 効果音とログ
         playEffect(SOUND_DATA.WARP);
         addLog('warp', 'log-system');
 
+        // ランダムな床へ転送
         const pos = findEmptyFloor();
-        gameState.player.x = pos.x; gameState.player.y = pos.y;
-        playEffect(SOUND_DATA.WARP); addLog('warp', 'log-system');
-        monstersTurn(); updateVision(); draw();
+        gameState.player.x = pos.x; 
+        gameState.player.y = pos.y;
+
+        // 転送先でもう一度効果音を鳴らす（移動した感を出す）
+        playEffect(SOUND_DATA.WARP);
+
+        // スキル使用後は敵のターンになり、視界を更新
+        monstersTurn(); 
+        updateVision(); 
+        draw();
     }
 }
 
