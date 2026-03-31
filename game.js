@@ -104,6 +104,7 @@ function init() {
     addLog('start', 'log-system');
     setupLevel();
     gameState.initialized = true;
+    gameState.bossDefeated = false;
     gameState.collection = {}; // リセット
     updateCollectionUI(); // UIを空にする
 }
