@@ -4,45 +4,170 @@ let bgmNextTime = 0;
 let isMuted = false;
 let bgmTimer = null;
 let audioCtx = null;
+let wordsData = []; // ここに words.json をロードする想定
+let currentCardIdx = 0;
+let cardFlipped = false;
+
+// --- モード開始処理 ---
+function startAdventureMode() {
+    // 1. 画面の切り替え
+    document.getElementById('guide-overlay').style.display = 'none';
+    
+    // 2. AudioContextの初期化と再開 (重要！)
+    handleAudioResume();
+
+    // 3. ゲームの初期化
+    if (!gameState.initialized) {
+        init();
+    } else {
+        draw();
+    }
+}
+
+async function startStudyMode() {
+    // 画面切り替え
+    document.getElementById('guide-overlay').style.display = 'none';
+    document.getElementById('study-screen').style.display = 'flex';
+
+    try {
+        // words.json を読み込む
+        const response = await fetch('words.json');
+        if (!response.ok) throw new Error('Network response was not ok');
+        
+        wordsData = await response.json();
+        console.log("読み込み成功:", wordsData);
+        
+        currentCardIdx = 0;
+        showCard();
+    } catch (error) {
+        console.error("JSON読み込み失敗:", error);
+        // 失敗した時のフォールバック（予備データ）
+        wordsData = [
+            { q: "JSONが読み込めませんでした", a: "サーバー(Live Server等)を起動しているか確認してください" }
+        ];
+        showCard();
+    }
+}
+
+// --- オーディオ再開用の共通関数 ---
+function handleAudioResume() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().then(() => {
+            console.log("Playback resumed successfully");
+            // ミュートでなければBGM開始
+            if (!bgmTimer && !isMuted) {
+                playBGM();
+            }
+        });
+    } else {
+        // すでに動いている場合でBGMが止まっていたら再開
+        if (!bgmTimer && !isMuted) {
+            playBGM();
+        }
+    }
+}
+
+function backToMenu() {
+    document.getElementById('study-screen').style.display = 'none';
+    document.getElementById('guide-overlay').style.display = 'flex';
+}
+
+// --- 暗記カードロジック ---
+function handleStudyClick() {
+    if (!cardFlipped) {
+        // 答えを表示
+        document.getElementById('card-a').classList.remove('hidden');
+        cardFlipped = true;
+    } else {
+        // 次のカードへ
+        currentCardIdx = (currentCardIdx + 1) % wordsData.length;
+        showCard();
+    }
+}
+
+function showCard() {
+    if (!wordsData || wordsData.length === 0) return;
+
+    cardFlipped = false;
+    const card = wordsData[currentCardIdx];
+
+    if (card) {
+        // JSONのキー名に合わせて修正
+        document.getElementById('card-q').textContent = card.text; // "q" ではなく "text"
+        document.getElementById('card-a').textContent = card.hint; // "a" ではなく "hint"
+        
+        document.getElementById('card-a').classList.add('hidden');
+        document.getElementById('study-progress').textContent = `${currentCardIdx + 1} / ${wordsData.length}`;
+    }
+}
+
+// エンターキーでも操作可能に
+window.addEventListener('keydown', (e) => {
+    if (document.getElementById('study-screen').style.display === 'flex') {
+        if (e.key === 'Enter') handleStudyClick();
+    }
+});
 
 function playBGM() {
     if (isMuted || !audioCtx) return;
 
+    // 1. トラックの取得と安全確認
+    const isBossFloor = (gameState && gameState.depth === CONFIG.MAX_DEPTH);
+    const track = isBossFloor ? SOUND_DATA.BGM_BOSS : SOUND_DATA.BGM_TRACK;
+    
+    if (!track || track.length === 0) return;
+
+    // 2. 現在のノートを取得
+    const note = track[bgmIndex % track.length];
+    if (!note || !note.freq) {
+        bgmIndex++; // 次へ進めて脱出
+        bgmTimer = setTimeout(playBGM, 100);
+        return;
+    }
+
+    const isBossAlive = gameState.monsters && gameState.monsters.some(m => m.isBoss);
+    const currentDur = isBossAlive ? note.dur / 2 : note.dur;
     const now = audioCtx.currentTime;
     if (bgmNextTime < now) bgmNextTime = now;
 
-    // --- 階層による曲の切り替え ---
-    // 現在の階が最大階層(MAX_DEPTH)ならボス曲、それ以外なら通常曲を選択
-    const isBossFloor = (gameState.depth === CONFIG.MAX_DEPTH);
-    const track = isBossFloor ? SOUND_DATA.BGM_BOSS : SOUND_DATA.BGM_TRACK;
+    // --- 3. メロディと和音の生成 ---
+    // oscillator を2つ作り、それぞれを単独の Gain に繋いで出力します
     
-    // インデックスが配列外にならないよう調整
-    const note = track[bgmIndex % track.length];
-    
-    // ボス戦中（ボスがまだ生きている）なら、さらにテンポを速く、音を激しくする
-    const isBossAlive = gameState.monsters.some(m => m.isBoss);
-    const currentDur = isBossAlive ? note.dur / 2 : note.dur;
-    const currentType = isBossAlive ? 'sawtooth' : 'triangle';
+    // 【主旋律】
+    const osc1 = audioCtx.createOscillator();
+    const g1 = audioCtx.createGain();
+    osc1.type = isBossAlive ? 'sawtooth' : 'triangle';
+    osc1.frequency.setValueAtTime(note.freq, bgmNextTime);
+    g1.gain.setValueAtTime(0.02, bgmNextTime);
+    g1.gain.exponentialRampToValueAtTime(0.001, bgmNextTime + currentDur);
+    osc1.connect(g1).connect(audioCtx.destination);
 
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
+    // 【伴奏：完全5度上の音】
+    // 周波数を「1.5倍」にすると、音楽的に最も安定した「ドとソ」の関係（和音）になります
+    // さらに1オクターブ下（0.75倍）にすることで厚みを出します
+    const osc2 = audioCtx.createOscillator();
+    const g2 = audioCtx.createGain();
+    osc2.type = 'sine'; 
+    osc2.frequency.setValueAtTime(note.freq * 0.75, bgmNextTime); 
+    g2.gain.setValueAtTime(0.015, bgmNextTime);
+    g2.gain.exponentialRampToValueAtTime(0.001, bgmNextTime + currentDur);
+    osc2.connect(g2).connect(audioCtx.destination);
 
-    osc.type = currentType; 
-    osc.frequency.setValueAtTime(note.freq, bgmNextTime);
-    
-    gain.gain.setValueAtTime(0.03, bgmNextTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, bgmNextTime + currentDur);
+    // 4. 同時再生
+    osc1.start(bgmNextTime);
+    osc1.stop(bgmNextTime + currentDur);
+    osc2.start(bgmNextTime);
+    osc2.stop(bgmNextTime + currentDur);
 
-    osc.connect(gain);
-    gain.connect(audioCtx.destination);
-
-    osc.start(bgmNextTime);
-    osc.stop(bgmNextTime + currentDur);
-
+    // 5. 次の準備
     bgmNextTime += currentDur;
-    // track.length を使うことで、曲の長さに合わせてループ
     bgmIndex = (bgmIndex + 1) % track.length;
 
+    // 6. ループ
     bgmTimer = setTimeout(playBGM, currentDur * 1000);
 }
 
@@ -56,25 +181,55 @@ function toggleMute() {
 
 // --- 2. ゲームの状態管理 ---
 let curLang = 'en';
+
+// ★gameState の中身は「名前: 値,」の形だけで書きます
 let gameState = { 
-    depth: 1, player: {}, map: [], explored: [], monsters: [], log: [], 
-    gameOver: false, initialized: false,
-    collection: {}, // { "DNS": 1, "HTTP": 3 } のように記録
-};
+    depth: 1, 
+    player: {}, 
+    map: [], 
+    explored: [], 
+    monsters: [], 
+    log: [], 
+    gameOver: false, 
+    initialized: false,
+    totalKills: 0,
+    warpCount: 0,
+    bossDefeated: false 
+}; // ここでしっかりセミコロンで閉じる
 
 // --- 3. システム関数 (言語・音効) ---
 function setLang(lang) {
     curLang = lang;
     const T = i18n[curLang];
+    
+    // 言語ボタンのスタイル更新
     document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
     const activeBtn = document.getElementById(`btn-${lang}`);
     if(activeBtn) activeBtn.classList.add('active');
+
+    // ★ ここから下：要素が存在する場合のみ実行するように修正
     const waitBtn = document.getElementById('wait');
-    waitBtn.textContent = T.wait;
-    waitBtn.style.fontSize = T.wait.length > 5 ? "10px" : "14px";
-    document.getElementById('skill').innerHTML = `${T.warpBtn}<br>(HP-20%)`;
-    document.getElementById('g-title').textContent = T.gTitle;
-    document.getElementById('g-body').innerHTML = T.gBody;
+    if (waitBtn) {
+        waitBtn.textContent = T.wait;
+        waitBtn.style.fontSize = T.wait.length > 5 ? "10px" : "14px";
+    }
+
+    const warpBtn = document.getElementById('warp-btn');
+    if (warpBtn) {
+        warpBtn.innerHTML = `${T.warpBtn}<br>(HP-20%)`; // コスト表示を合わせる
+    }
+
+    const shockBtn = document.getElementById('shock-btn');
+    if (shockBtn) {
+        shockBtn.innerHTML = `${T.shockBtn}<br>(HP-20%)`; // コスト表示を合わせる
+    }
+
+    const gTitle = document.getElementById('g-title');
+    if (gTitle) gTitle.textContent = T.gTitle;
+
+    const gBody = document.getElementById('g-body');
+    if (gBody) gBody.innerHTML = T.gBody;
+
     if (gameState.initialized) draw();
 }
 
@@ -100,16 +255,18 @@ function playEffect(data) {
 // --- 4. 初期化とレベル生成 ---
 function init() {
     gameState.player = { x: 0, y: 0, hp: 30, maxHp: 30, atk: 6, exp: 0, lv: 1, nextExp: 15, vision: 4 };
-    gameState.depth = 1; gameState.log = []; gameState.gameOver = false;
+    gameState.depth = 1; 
+    gameState.log = []; 
+    gameState.gameOver = false;
+    // --- ここを追加 ---
+    gameState.totalKills = 0;
+    gameState.warpCount = 0;
+    // ------------------
     addLog('start', 'log-system');
     setupLevel();
     gameState.initialized = true;
-    gameState.bossDefeated = false;
-    gameState.collection = {}; // リセット
-    updateCollectionUI(); // UIを空にする
 }
 
-// 必ず「床」の座標を返す
 function findEmptyFloor() {
     let x, y;
     let attempts = 0;
@@ -177,28 +334,11 @@ function setupLevel() {
     for (let i = 0; i < 3 + gameState.depth; i++) {
         const mPos = findEmptyFloor();
         const typeIdx = Math.min(gameState.depth - 1, 2);
-        
-        // --- 追加: 単語の選択 ---
-        const wordData = EXAM_WORDS[Math.floor(Math.random() * EXAM_WORDS.length)];
-        
-        gameState.monsters.push({ 
-            typeIndex: typeIdx, 
-            tile: ['r','A','e'][typeIdx], 
-            hp: 10 * gameState.depth, 
-            atk: 3 * gameState.depth, 
-            color: CONFIG.APPEARANCE.MONSTER.color, 
-            x: mPos.x, 
-            y: mPos.y,
-            // ここに追加
-            studyText: wordData.text,
-            studyHint: wordData.hint 
-        });
-        gameState.map[mPos.y][mPos.x] = CONFIG.TILES.MONSTER_GENERIC;
+        gameState.monsters.push({ typeIndex: typeIdx, tile: ['r','A','e'][typeIdx], hp: 10 * gameState.depth, atk: 3 * gameState.depth, color: CONFIG.APPEARANCE.MONSTER.color, x: mPos.x, y: mPos.y });
+        gameState.map[mPos.y][mPos.x] = T.MONSTER_GENERIC;
     }
-    
     const itemPos = findEmptyFloor();
     gameState.map[itemPos.y][itemPos.x] = T.POTION;
-
     updateVision();
     draw();
 }
@@ -218,11 +358,9 @@ function getTileDisplay(x, y, isVisible) {
         return { c: ' ', color: APP.UNEXPLORED.color };
     }
     const tile = gameState.map[y][x];
-    // getTileDisplay 内のモンスター表示部分を修正
     if (tile === TILE.MONSTER_GENERIC || tile === TILE.BOSS) {
         const m = gameState.monsters.find(m => m.x === x && m.y === y);
-        // 記号 (m.tile) だけを返すように戻す
-        return { c: m ? m.tile : tile, color: m ? m.color : APP.MONSTER.color };
+        return { c: m ? m.tile : tile, color: m ? m.color : (tile === TILE.BOSS ? APP.BOSS.color : APP.MONSTER.color) };
     }
     const tileColors = { [TILE.WALL]: APP.WALL.color, [TILE.POTION]: APP.POTION.color, [TILE.STAIRS]: APP.STAIRS.color, [TILE.FLOOR]: APP.FLOOR.color };
     return { c: tile, color: tileColors[tile] || APP.FLOOR.color };
@@ -244,13 +382,13 @@ function draw() {
             // 視界の計算
             const isVisible = Math.sqrt((x - p.x)**2 + (y - p.y)**2) <= p.vision;
             
-            // ここがポイント：infoはオブジェクト
+            // 既存の関数からタイル情報を取得
             const info = getTileDisplay(x, y, isVisible);
             
-            // info.c (文字) と info.color (色) を使って組み立てる
-            view += `<span style="color:${info.color};">${info.c}</span>`;
+            // ★ここを修正：id="cell-x-y" を追加して識別可能にする
+            view += `<span id="cell-${x}-${y}" style="color:${info.color};">${info.c}</span>`;
         }
-        view += "\n"; 
+        view += "\n";
     }
     
     screen.innerHTML = hud + view;
@@ -272,6 +410,7 @@ function handleInput(dx, dy) {
     }
     if (!gameState.gameOver) {
         monstersTurn();
+        checkAchievements(); // HP1の実績などをチェック
         updateVision(); 
         draw();
     }
@@ -286,8 +425,9 @@ function movePlayer(nx, ny, tile) {
         addLog('potion', 'log-player');
         gameState.map[ny][nx] = T.FLOOR;
     } else if (tile === T.STAIRS) {
-        playEffect(SOUND_DATA.STAIRS);
         gameState.depth++;
+        checkAchievements(); // 2F到達の実績などがここで発動する
+        playEffect(SOUND_DATA.STAIRS);
         addLog('stairs', 'log-system', { d: gameState.depth });
         setupLevel();
     } else {
@@ -295,38 +435,44 @@ function movePlayer(nx, ny, tile) {
     }
 }
 
-// --- 6. アクションとターン処理 --- の combat 関数を修正
 function combat(nx, ny) {
     playEffect(SOUND_DATA.PLAYER_ATTACK);
     const m = gameState.monsters.find(m => m.x === nx && m.y === ny);
-    
-    // --- 追加：攻撃した瞬間に「答え」をログに出す ---
-    // これにより、ぶつかるまで答えが見えない「暗記カード」状態になります
-    addLog('checkAnswer', 'log-system', { studyText: m.studyText, studyHint: m.studyHint });
+    if (!m) return; // 念のため
 
     const dmg = gameState.player.atk + Math.floor(Math.random()*5);
     m.hp -= dmg;
-    
     addLog('attack', 'log-player', { nIsMonster: true, monsterObj: m, dmg: dmg });
 
     if (m.hp <= 0) {
-        // --- コレクションに追加 ---
-        const word = m.studyText;
-        if (!gameState.collection[word]) {
-            gameState.collection[word] = 0;
-        }
-        gameState.collection[word]++;
+        // --- 図鑑登録処理 ---
+        const mName = i18n[curLang].mNames[m.typeIndex] || (m.isBoss ? i18n[curLang].bName : "Unknown");
+        monsterEncyclopedia[mName] = (monsterEncyclopedia[mName] || 0) + 1;
+        localStorage.setItem('rogue_encyclopedia', JSON.stringify(monsterEncyclopedia));
         
-        // UIを更新
-        updateCollectionUI();
+        if (Object.keys(monsterEncyclopedia).length >= 3) {
+            checkAchievements();
+        }
+
+        gameState.totalKills++;
+
+        if (m.isBoss) {
+            gameState.bossDefeated = true;
+            checkAchievements();
+            playEffect(SOUND_DATA.DEFEATED);
+            addLog('defeat', 'log-system', { nIsMonster: true, monsterObj: m });
+            return endGame(true); // ゲーム勝利
+        }
+
         playEffect(SOUND_DATA.DEFEATED);
-        // 倒した時も「正解！」というニュアンスのログを出すと達成感が出ます
         addLog('defeat', 'log-system', { nIsMonster: true, monsterObj: m });
         
+        // 敵を除去
         gameState.map[ny][nx] = CONFIG.TILES.FLOOR;
         gameState.monsters = gameState.monsters.filter(mon => mon !== m);
-        if (m.isBoss) return endGame(true);
+        
         checkLvUp();
+        checkAchievements();
     }
 }
 
@@ -337,14 +483,7 @@ function monstersTurn() {
             const dmg = Math.max(1, m.atk - Math.floor(Math.random()*3));
             gameState.player.hp -= dmg;
             playEffect(m.isBoss ? SOUND_DATA.BOSS_ATTACK : SOUND_DATA.ENEMY_ATTACK);
-            
-            // --- ここをカスタマイズ ---
-            // ログに「問題」として単語とヒントを出す
-            addLog('enemyAttack', 'log-enemy', { 
-                studyText: m.studyText, 
-                firstChar: m.studyText.charAt(0), // 最初の1文字を渡す
-                dmg: dmg 
-            });            
+            addLog('damaged', 'log-enemy', { nIsMonster: true, monsterObj: m, dmg: dmg });
             if (gameState.player.hp <= 0) endGame(false);
         } else {
             moveMonsterRandomly(m);
@@ -367,7 +506,10 @@ function moveMonsterRandomly(m) {
 
 function useSkill() {
     // HPが1以上あれば発動可能にする
-    if (gameState.player.hp > 0 && !gameState.gameOver) {
+if (gameState.player.hp > 0 && !gameState.gameOver) {
+        // ...コスト計算
+        gameState.warpCount++; // ワープ回数を加算
+        checkAchievements();   // チェック
         // 現在のHPの20%を計算（端数切り上げ）
         const cost = Math.ceil(gameState.player.hp * 0.2);
         gameState.player.hp -= cost;
@@ -385,7 +527,7 @@ function useSkill() {
         const screen = document.getElementById('screen');
         screen.style.backgroundColor = '#444'; 
         setTimeout(() => { screen.style.backgroundColor = '#000'; }, 50);
-
+        
         // 効果音とログ
         playEffect(SOUND_DATA.WARP);
         addLog('warp', 'log-system');
@@ -428,51 +570,101 @@ function updateLogUI(T) {
     logDiv.innerHTML = "";
     gameState.log.slice(-4).forEach(entry => {
         let msg = T[entry.key] || entry.key;
-        
-        // --- モンスター名の置換処理 ---
         if (entry.params.nIsMonster) {
             const m = entry.params.monsterObj;
-            const mName = m.isBoss ? T.bName : (m.studyText || T.mNames[m.typeIndex]);
-            msg = msg.replace(`{n}`, mName);
+            msg = msg.replace(`{n}`, m.isBoss ? T.bName : T.mNames[m.typeIndex]);
         }
-
-        // --- 全てのパラメータ（studyText, dmgなど）を一括置換する処理 ---
-        Object.keys(entry.params).forEach(k => {
-            // 例: msg 内の {studyText} を entry.params['studyText'] の値で書き換える
-            msg = msg.split(`{${k}}`).join(entry.params[k]);
-        });
-
-        const d = document.createElement('div'); 
-        d.className = entry.type; 
-        d.textContent = msg;
+        Object.keys(entry.params).forEach(k => msg = msg.replace(`{${k}}`, entry.params[k]));
+        const d = document.createElement('div'); d.className = entry.type; d.textContent = msg;
         logDiv.appendChild(d);
     });
 }
 
 function isGuideOpen() { return document.getElementById('guide-overlay').style.display === 'flex'; }
 function openGuide() { document.getElementById('guide-overlay').style.display = 'flex'; if (bgmTimer) { clearTimeout(bgmTimer); bgmTimer = null; } }
-async function closeGuide() { 
+function closeGuide() { 
     document.getElementById('guide-overlay').style.display = 'none';
-    
-    // AudioContextの生成
     if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-
-    // 1. まずゲームを初期化して描画してしまう（データ待ちで真っ白を防ぐ）
-    if(!gameState.initialized) init();
-
-    // 2. その後、非同期でデータを読み込み、終わったら再描画
-    try {
-        await loadStudyData();
-        setupLevel(); // データを反映させた状態でマップを再生成
-    } catch (e) {
-        console.error("Study data load failed, playing with defaults.");
-    }
-
     audioCtx.resume().then(() => {
         playEffect(SOUND_DATA.START_GAME);
         if (!bgmTimer && !isMuted) { playBGM(); }
     });
+    if(!gameState.initialized) init();
 }
+
+function checkAchievements() {
+    Object.values(ACHIEVEMENTS).forEach(ach => {
+        // まだ解除されておらず、かつ条件を満たしているか
+        if (!unlockedAchievements.includes(ach.id) && ach.check()) {
+            unlockedAchievements.push(ach.id);
+            localStorage.setItem('rogue_achievements', JSON.stringify(unlockedAchievements));
+            
+            // ログに通知を表示（i18nに achievement 用のキーがない場合は直接表示）
+            addLog(`🏆【実績解除】${ach.name}`, 'log-system');
+            
+            // お祝いの音（START_GAMEの音を流用、または新規作成）
+            playEffect({ freq: 880, type: 'triangle', dur: 0.5, gain: 0.05 });
+        }
+    });
+}
+
+function toggleAchievements() {
+    const overlay = document.getElementById('ach-overlay');
+    const list = document.getElementById('ach-list');
+    
+    // 表示の切り替え
+    if (overlay.style.display === 'none') {
+        // リストを生成
+        list.innerHTML = "";
+        Object.values(ACHIEVEMENTS).forEach(ach => {
+            const isUnlocked = unlockedAchievements.includes(ach.id);
+            const div = document.createElement('div');
+            div.className = `ach-item ${isUnlocked ? 'unlocked' : 'locked'}`;
+            div.innerHTML = `
+                <span style="font-size:20px">${isUnlocked ? '🏆' : '🔒'}</span>
+                <div>
+                    <div style="font-weight:bold; font-size:14px">${ach.name}</div>
+                    <div style="font-size:11px; color:#aaa">${ach.desc}</div>
+                </div>
+            `;
+            list.appendChild(div);
+        });
+        overlay.style.display = 'flex';
+    } else {
+        overlay.style.display = 'none';
+    }
+}
+
+// function useShockwave() {
+//     console.log(document.getElementById("cell-" + px + "-" + py))
+//     // 1. まず再描画して ID 付きの <span> を生成させる
+//     draw(); 
+
+//     // 2. その直後に要素を取得する
+//     const px = gameState.player.x;
+//     const py = gameState.player.y;
+
+//     for (let dy = -1; dy <= 1; dy++) {
+//         for (let dx = -1; dx <= 1; dx++) {
+//             const tx = px + dx;
+//             const ty = py + dy;
+
+//             // ID名が draw() で作ったものと完全に一致しているか確認
+//             const cell = document.getElementById(`cell-${tx}-${ty}`);
+            
+//             if (cell) {
+//                 // 強制的にスタイルを上書きして確認
+//                 cell.style.backgroundColor = "yellow"; 
+//                 cell.classList.add('glow-effect');
+                
+//                 setTimeout(() => {
+//                     cell.classList.remove('glow-effect');
+//                     cell.style.backgroundColor = ""; // 元に戻す
+//                 }, 500);
+//             }
+//         }
+//     }
+// }
 
 function endGame(win) { gameState.gameOver = true; alert(win ? i18n[curLang].win : i18n[curLang].lose); location.reload(); }
 
@@ -487,37 +679,3 @@ window.onload = () => {
     openGuide();
 };
 
-async function loadStudyData() {
-    if (!CONFIG.STUDY_MODE.enabled) return;
-
-    try {
-        const response = await fetch(CONFIG.STUDY_MODE.jsonPath);
-        if (!response.ok) throw new Error("JSON load failed");
-        
-        const data = await response.json();
-        // グローバル変数にセット
-        EXAM_WORDS = data; 
-        console.log("OCRデータをロードしました:", EXAM_WORDS);
-    } catch (e) {
-        console.warn("暗記データの読み込みに失敗。デフォルト設定で続行します。");
-    }
-}
-
-// 表示を更新する関数
-function updateCollectionUI() {
-    const listDiv = document.getElementById('collection-list');
-    if (!listDiv) return;
-
-    listDiv.innerHTML = "";
-    // 倒した数が多い順、あるいは見つけた順に表示
-    Object.keys(gameState.collection).forEach(word => {
-        const count = gameState.collection[word];
-        const span = document.createElement('span');
-        span.style.border = "1px solid #0a0";
-        span.style.padding = "2px 5px";
-        span.style.borderRadius = "3px";
-        // 1回倒したら表示、複数回倒すと (x2) と出るイメージ
-        span.textContent = `${word}${count > 1 ? ' x' + count : ''}`;
-        listDiv.appendChild(span);
-    });
-}

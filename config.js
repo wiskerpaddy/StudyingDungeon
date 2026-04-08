@@ -8,14 +8,7 @@ const CONFIG = {
     MAX_DEPTH: 5,   // ボスが登場する階層
     WARP_COST: 5,   // ワープスキル使用時のHP消費量
     HEAL_VAL: 12,    // 回復アイテム(L)の回復量
-
-    // --- 追加: 暗記モード設定 ---
-    STUDY_MODE: {
-        enabled: true,          // 暗記モードのON/OFF
-        jsonPath: "./words.json", // OCRデータファイルのパス
-        font: "12px 'Courier New', monospace",
-        enemyColor: "#ffaaaa",  // 単語を表示する敵の色
-    },
+    SHOCKWAVE_COST: 8, // 固定ダメージでHPを消費
 
 // タイルやエンティティの記号定義
     TILES: {
@@ -41,6 +34,65 @@ const CONFIG = {
     }
 };
 
+const ACHIEVEMENTS = {
+    FIRST_STEP: { 
+        id: 'first_step', 
+        name: '最初の探検', 
+        desc: '地下2階に到達した', 
+        check: () => gameState.depth >= 2 
+    },
+    MONSTER_KILLER: { 
+        id: 'monster_killer', 
+        name: '魔物ハンター', 
+        desc: '累計10体の敵を倒した', 
+        check: () => gameState.totalKills >= 10 
+    },
+    SURVIVOR: { 
+        id: 'survivor', 
+        name: '九死に一生', 
+        desc: 'HP 1で生き残った', 
+        check: () => gameState.player.hp === 1 
+    },
+    WARP_ADDICT: { 
+        id: 'warp_addict', 
+        name: '時空の旅人', 
+        desc: 'ワープを5回以上使用した', 
+        check: () => gameState.warpCount >= 5 
+    },
+    BOSS_KILLER_LV5: { 
+        id: 'boss_lv5', 
+        name: '熟練の奏者', 
+        desc: 'Lv5以下でボスを撃破した', 
+        check: () => gameState.bossDefeated && gameState.player.lv <= 5 
+    },
+    BOSS_KILLER_LV4: { 
+        id: 'boss_lv4', 
+        name: '精鋭の独奏', 
+        desc: 'Lv4以下でボスを撃破した', 
+        check: () => gameState.bossDefeated && gameState.player.lv <= 4 
+    },
+    BOSS_KILLER_LV3: { 
+        id: 'boss_lv3', 
+        name: '伝説の神童', 
+        desc: 'Lv3以下でボスを撃破した', 
+        check: () => gameState.bossDefeated && gameState.player.lv <= 3 
+    }
+};
+
+// 敵ごとの詳細データ（図鑑表示用）
+const MONSTER_DATA = [
+    { name: "ノイズ・ラット", desc: "不快な足音を立てるネズミ。群れると厄介。" },
+    { name: "不協和音の鎧", desc: "古い甲冑に音が宿ったもの。防御力が高い。" },
+    { name: "沈黙の眼", desc: "視線が合うと音を奪われる。遠距離から凝視してくる。" }
+];
+
+// 達成済みのIDを保存する配列
+let unlockedAchievements = JSON.parse(localStorage.getItem('rogue_achievements')) || [];
+
+// 討伐記録（初期値または保存データから読み込み）
+let monsterEncyclopedia = JSON.parse(localStorage.getItem('rogue_encyclopedia')) || {};
+
+
 
 /**
  * 2. 多言語定義 (i18n)
@@ -65,14 +117,11 @@ const i18n = {
         floor: "FL", 
         wait: "待機", 
         warpBtn: "ワープ",
+        shockBtn: "ショック",
         mNames: ["ノイズ・ラット", "不協和音の鎧", "沈黙の眼"], 
         bName: "古の指揮者",
         win: "伝説の奏者となった！", 
-        lose: "音が途絶えた...",
-        question: "【暗記】{studyText} とは？ → {studyHint}",
-        // 攻撃されたときは「正体」だけを明かす
-        enemyAttack: "【！】{studyText} の先制攻撃！ ({firstChar}...) とは？",        // 自分が攻撃したときだけ「答え」を出す
-        checkAnswer: "【確認】{studyText} ⇒ {studyHint}",
+        lose: "音が途絶えた..."
     },
     /* 英語定義 */
     en: {
@@ -93,12 +142,11 @@ const i18n = {
         floor: "FL", 
         wait: "WAIT", 
         warpBtn: "WARP",
+        shockBtn: "SHOCK",
         mNames: ["Noise Rat", "Discord Armor", "Silent Eye"], 
         bName: "Ancient Conductor",
         win: "Legend Soloist!", 
-        lose: "Music stopped...",
-        enemyAttack: "[!] {studyText} attacks! ({firstChar}...) is ？",
-        checkAnswer: "[CHECK] {studyText} => {studyHint}",
+        lose: "Music stopped..."
     },
         /* スペイン語定義 */
     es: {
@@ -118,14 +166,12 @@ const i18n = {
         atk: "ATQ", 
         floor: "PISO", 
         wait: "ESPERA", 
-        warpBtn: "WARP",
+        warpBtn: "DEFORMA",
+        shockBtn: "IMPULSO",
         mNames: ["Rata Ruido", "Armadura Discord", "Ojo Silencio"], 
         bName: "Director Antiguo",
         win: "¡Solista de leyenda!", 
-        lose: "Música detenida...",
-        question: "【MEMORIZAR】 ¿Qué es {studyText}? → {studyHint}",
-        enemyAttack: "¡{studyText} te ataca! ({firstChar}...) es ？",
-        checkAnswer: "[REVISAR] {studyText} => {studyHint}",
+        lose: "Música detenida..."
     }
 };
 
@@ -163,6 +209,12 @@ const SOUND_DATA = {
     
     // ワープ：空間がねじれるような、滑らかな上昇音
     WARP: [
+        { freq: 440, type: 'triangle', dur: 0.1, gain: 0.03 }, // ラ
+        { freq: 660, type: 'triangle', dur: 0.1, gain: 0.03 }, // ミ
+        { freq: 880, type: 'triangle', dur: 0.1, gain: 0.02 }, // 高いラ
+        { freq: 1320, type: 'sine',     dur: 0.4, gain: 0.01 }  // 非常に高いミ（サイン波で柔らかく締める）
+    ],
+    SHOCK: [
         { freq: 440, type: 'triangle', dur: 0.1, gain: 0.03 }, // ラ
         { freq: 660, type: 'triangle', dur: 0.1, gain: 0.03 }, // ミ
         { freq: 880, type: 'triangle', dur: 0.1, gain: 0.02 }, // 高いラ
@@ -218,9 +270,48 @@ const SOUND_DATA = {
         { freq: 116.54, dur: 0.8 }, // 低い Bb
         { freq: 103.83, dur: 0.8 }  // 低い G#
     ],
+    BGM_TRACK: [
+        { freq: 293.66, dur: 0.8 }, // レ (D)
+        { freq: 220.00, dur: 0.8 }, // ラ (A)
+        { freq: 246.94, dur: 0.8 }, // シ (Bm)
+        { freq: 185.00, dur: 0.8 }, // ファ# (F#m)
+        { freq: 196.00, dur: 0.8 }, // ソ (G)
+        { freq: 146.83, dur: 0.8 }, // レ (D)
+        { freq: 196.00, dur: 0.8 }, // ソ (G)
+        { freq: 220.00, dur: 0.8 }  // ラ (A)
+    ],
+    // 既存の BGM_TRACK の近くに配置
+    BGM_BASS : [
+        { freq: 146.83, dur: 0.8 }, // レ (D)
+        { freq: 110.00, dur: 0.8 }, // ラ (A)
+        { freq: 123.47, dur: 0.8 }, // シ (B)
+        { freq: 92.50,  dur: 0.8 }, // ファ# (F#)
+        { freq: 98.00,  dur: 0.8 }, // ソ (G)
+        { freq: 73.42,  dur: 0.8 }, // レ (D)
+        { freq: 98.00,  dur: 0.8 }, // ソ (G)
+        { freq: 110.00, dur: 0.8 }  // ラ (A)
+    ]
 };
 
-// もし未定義なら空配列で初期化する、という書き方
-if (typeof EXAM_WORDS === 'undefined') {
-    var EXAM_WORDS = [{ text: "Default", hint: "Fallback" }];
+async function loadExternalBgm() {
+    try {
+        const response = await fetch('music_data.json');
+        const bgmData = await response.json();
+        
+        // コンソールで中身を確認
+        console.log("読み込んだJSON全体:", bgmData);
+
+        // キー名を指定して代入（YOUDO_1 などの名前を確認してください）
+        if (bgmData.YOUDO_1) {
+            SOUND_DATA.BGM_TRACK = bgmData.YOUDO_1;
+            console.log("BGM_TRACKを更新しました。音数:", SOUND_DATA.BGM_TRACK.length);
+        }
+        if (bgmData.YOUDO_2) {
+            SOUND_DATA.BGM_BOSS = bgmData.YOUDO_2;
+            console.log("BGM_BOSSを更新しました。音数:", SOUND_DATA.BGM_BOSS.length);
+        }
+
+    } catch (error) {
+        console.error("読み込みエラー:", error);
+    }
 }
