@@ -89,6 +89,7 @@ function handleStudyClick() {
     }
 }
 
+// ① 暗記モードの「Q.」「A.」明示
 function showCard() {
     if (!wordsData || wordsData.length === 0) return;
 
@@ -96,9 +97,9 @@ function showCard() {
     const card = wordsData[currentCardIdx];
 
     if (card) {
-        // JSONのキー名に合わせて修正
-        document.getElementById('card-q').textContent = card.text; // "q" ではなく "text"
-        document.getElementById('card-a').textContent = card.hint; // "a" ではなく "hint"
+        // Q. と A. を追加して視認性を向上
+        document.getElementById('card-q').innerHTML = `<small style="color:#888;">Q.</small><br>${card.text}`;
+        document.getElementById('card-a').innerHTML = `<small style="color:#888;">A.</small><br>${card.hint}`;
         
         document.getElementById('card-a').classList.add('hidden');
         document.getElementById('study-progress').textContent = `${currentCardIdx + 1} / ${wordsData.length}`;
@@ -223,6 +224,10 @@ function setLang(lang) {
     if (shockBtn) {
         shockBtn.innerHTML = `${T.shockBtn}<br>(HP-20%)`; // コスト表示を合わせる
     }
+
+    // ヘルプボタンのリンク先を openHelp に固定する
+    const helpBtn = document.querySelector('.help-circle');
+    if (helpBtn) helpBtn.onclick = openHelp;
 
     const gTitle = document.getElementById('g-title');
     if (gTitle) gTitle.textContent = T.gTitle;
@@ -581,7 +586,6 @@ function updateLogUI(T) {
 }
 
 function isGuideOpen() { return document.getElementById('guide-overlay').style.display === 'flex'; }
-function openGuide() { document.getElementById('guide-overlay').style.display = 'flex'; if (bgmTimer) { clearTimeout(bgmTimer); bgmTimer = null; } }
 function closeGuide() { 
     document.getElementById('guide-overlay').style.display = 'none';
     if (!audioCtx) { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
@@ -679,3 +683,61 @@ window.onload = () => {
     openGuide();
 };
 
+// 「？」ボタンやヘルプが必要な時に呼ぶ
+function openHelp() {
+    const T = i18n[curLang];
+    const hTitle = document.getElementById('h-modal-title');
+    const hBody = document.getElementById('h-modal-body');
+    
+    if (hTitle) hTitle.textContent = T.hTitle;
+    if (hBody) hBody.innerHTML = T.hContent;
+
+    document.getElementById('help-overlay').style.display = 'flex';
+
+    // BGM停止処理（既存ロジック維持）
+    if (bgmTimer) { 
+        clearTimeout(bgmTimer); 
+        bgmTimer = null; 
+    }
+}
+
+function closeHelp() {
+    document.getElementById('help-overlay').style.display = 'none';
+    
+    // ② AudioContext のレジューム演出
+    // ヘルプを閉じたときに「よし、始めるぞ」のSEを鳴らす
+    if (audioCtx) {
+        audioCtx.resume().then(() => {
+            playEffect(SOUND_DATA.START_GAME);
+        });
+    }
+    
+    audioCtx.resume().then(() => {
+        playEffect(SOUND_DATA.START_GAME);
+        if (!bgmTimer && !isMuted) { playBGM(); }
+    });
+}
+
+// モード選択画面を開く（既存の openGuide を整理）
+function openGuide() {
+    // 全てのゲーム画面を一旦隠す
+    document.getElementById('study-screen').style.display = 'none';
+    document.getElementById('guide-overlay').style.display = 'flex';
+    
+    // BGM停止処理（既存ロジック維持）
+    if (bgmTimer) { 
+        clearTimeout(bgmTimer); 
+        bgmTimer = null; 
+    }
+}
+
+// 言語に合わせてヘルプ内容を書き換える関数（setLangから呼ぶと便利）
+function updateHelpText() {
+    const T = i18n[curLang];
+    const helpTitle = document.getElementById('help-modal-title');
+    const helpBody = document.getElementById('help-modal-body');
+    
+    if (helpTitle) helpTitle.textContent = T.helpTitle || "GUIDE";
+    // i18nに新しく定義する helpContent を流し込む
+    if (helpBody) helpBody.innerHTML = T.helpContent || T.gBody; 
+}

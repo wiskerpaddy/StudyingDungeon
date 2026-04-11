@@ -18,7 +18,8 @@
             </div>
             <div class="top-icons">
                 <div class="ach-circle" id="ach-btn" onclick="toggleAchievements()">🏆</div>
-                <div class="help-circle" onclick="openGuide()">?</div>
+                <div class="help-circle" onclick="openHelp()">Help</div>
+                <div class="help-circle" onclick="openGuide()">Title</div>
             </div>
         </div>
         <div id="ach-overlay" style="display:none;" onclick="toggleAchievements()">
@@ -30,12 +31,20 @@
         </div>
 
         <div id="guide-overlay">
-            <div class="guide-title" id="g-title">STUDYNG DUNGEON</div>
+            <div class="guide-title" id="g-title">Shadow Rogue Dungeon</div>
             <div class="guide-text" id="g-body">モードを選択してください</div>
             
             <div class="menu-buttons">
                 <button class="mode-btn" onclick="startStudyMode()">🗂 暗記カードモード</button>
                 <button class="mode-btn" onclick="startAdventureMode()">⚔ 冒険モード</button>
+            </div>
+        </div>
+
+        <div id="help-overlay" style="display:none;" onclick="closeHelp()">
+            <div class="ach-modal" onclick="event.stopPropagation()" style="border-color: #555;">
+                <h3 id="h-modal-title">Guide</h3>
+                <div id="h-modal-body" style="margin: 15px 0;"></div>
+                <button class="close-btn" onclick="closeHelp()">Close</button>
             </div>
         </div>
 
