@@ -11,10 +11,9 @@
     <div id="game-container">
         <div id="top-bar">
             <div class="lang-selector">
-                <button id="btn-ja" class="lang-btn" onclick="setLang('ja')">JP</button>
+                <button id="mute-btn" class="lang-btn" onclick="toggleMute()">🔊</button> <button id="btn-ja" class="lang-btn" onclick="setLang('ja')">JP</button>
                 <button id="btn-en" class="lang-btn" onclick="setLang('en')">EN</button>
                 <button id="btn-es" class="lang-btn" onclick="setLang('es')">ES</button>
-                <button id="mute-btn" class="lang-btn" onclick="toggleMute()">🔊</button>
             </div>
             <div class="top-icons">
                 <div class="ach-circle" id="ach-btn" onclick="toggleAchievements()">🏆</div>
@@ -39,6 +38,14 @@
                 <button class="mode-btn" onclick="startAdventureMode()">⚔ 冒険モード</button>
             </div>
         </div>
+        
+        <div id="main-area">
+            <div id="screen"></div>
+            <div id="collection-container">
+                <div id="collection-header">【 LEARNED 】</div>
+                <div id="collection-list"></div>
+            </div>
+        </div>
 
         <div id="help-overlay" style="display:none;" onclick="closeHelp()">
             <div class="ach-modal" onclick="event.stopPropagation()" style="border-color: #555;">
@@ -61,7 +68,6 @@
             <div class="study-footer">Tap or Enter to Flip / Next</div>
         </div>
 
-        <div id="screen"></div>
         <div id="log"></div>
         
         <div id="controls">
@@ -76,5 +82,17 @@
     </div>
     <script src="config.js"></script>
     <script src="game.js"></script>
+    <script>
+    window.onload = async () => {
+        // Live Serverで実行していればここが通ります
+        try {
+            await loadStudyData(); 
+        } catch (e) {
+            console.log("JSON読み込みスキップ（ローカル実行中など）");
+        }
+        setLang('ja'); // 言語設定
+        openGuide();   // ガイドを開く（この中の closeGuide で init が呼ばれる）
+    };
+    </script>
 </body>
 </html>

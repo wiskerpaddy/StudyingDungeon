@@ -97,9 +97,13 @@ function showCard() {
     const card = wordsData[currentCardIdx];
 
     if (card) {
-        // Q. と A. を追加して視認性を向上
-        document.getElementById('card-q').innerHTML = `<small style="color:#888;">Q.</small><br>${card.text}`;
-        document.getElementById('card-a').innerHTML = `<small style="color:#888;">A.</small><br>${card.hint}`;
+        // ★ ここを確認！JSONのキー名 「text」 と 「hint」 に合わせます
+        // もし card.text が undefined なら、以前の card.q などが残っているかもしれません
+        const questionText = card.text || "データなし";
+        const answerText = card.hint || "ヒントなし";
+
+        document.getElementById('card-q').innerHTML = `<small style="color:#888;">Q.</small><br>${questionText}`;
+        document.getElementById('card-a').innerHTML = `<small style="color:#888;">A.</small><br>${answerText}`;
         
         document.getElementById('card-a').classList.add('hidden');
         document.getElementById('study-progress').textContent = `${currentCardIdx + 1} / ${wordsData.length}`;
@@ -339,8 +343,25 @@ function setupLevel() {
     for (let i = 0; i < 3 + gameState.depth; i++) {
         const mPos = findEmptyFloor();
         const typeIdx = Math.min(gameState.depth - 1, 2);
-        gameState.monsters.push({ typeIndex: typeIdx, tile: ['r','A','e'][typeIdx], hp: 10 * gameState.depth, atk: 3 * gameState.depth, color: CONFIG.APPEARANCE.MONSTER.color, x: mPos.x, y: mPos.y });
-        gameState.map[mPos.y][mPos.x] = T.MONSTER_GENERIC;
+        
+        // --- 修正: EXAM_WORDS が空でないかチェック ---
+        let wordData = { text: "TCP/IP", hint: "Network Protocol" }; // デフォルト値
+        if (typeof EXAM_WORDS !== 'undefined' && EXAM_WORDS.length > 0) {
+            wordData = EXAM_WORDS[Math.floor(Math.random() * EXAM_WORDS.length)];
+        }  
+        gameState.monsters.push({ 
+            typeIndex: typeIdx, 
+            tile: ['r','A','e'][typeIdx], 
+            hp: 10 * gameState.depth, 
+            atk: 3 * gameState.depth, 
+            color: CONFIG.APPEARANCE.MONSTER.color, 
+            x: mPos.x, 
+            y: mPos.y,
+            // ここに追加
+            studyText: wordData.text,
+            studyHint: wordData.hint 
+        });
+        gameState.map[mPos.y][mPos.x] = CONFIG.TILES.MONSTER_GENERIC;
     }
     const itemPos = findEmptyFloor();
     gameState.map[itemPos.y][itemPos.x] = T.POTION;
@@ -441,10 +462,29 @@ function movePlayer(nx, ny, tile) {
 }
 
 function combat(nx, ny) {
+    const mIndex = gameState.monsters.findIndex(m => m.x === nx && m.y === ny);
+    if (mIndex === -1) return;
+    const m = gameState.monsters[mIndex];
+    
     playEffect(SOUND_DATA.PLAYER_ATTACK);
-    const m = gameState.monsters.find(m => m.x === nx && m.y === ny);
-    if (!m) return; // 念のため
+    // ログ表示
+    const sText = m.studyText || "Unknown";
+    const sHint = m.studyHint || "No Hint";
+    
+    // 他の箇所で「ノイズ」のようなテキストが入らないよう、addLogを「checkAnswer」タイプで固定
+    if (typeof addLog === 'function') {
+        addLog('checkAnswer', 'log-system', { 
+            studyText: sText, 
+            studyHint: sHint 
+        });
+    }
 
+    if (!gameState.collection) gameState.collection = {};
+    if (!gameState.collection[sText]) {
+        gameState.collection[sText] = 0;
+    }
+
+    gameState.collection[sText]++;
     const dmg = gameState.player.atk + Math.floor(Math.random()*5);
     m.hp -= dmg;
     addLog('attack', 'log-player', { nIsMonster: true, monsterObj: m, dmg: dmg });
@@ -454,6 +494,17 @@ function combat(nx, ny) {
         const mName = i18n[curLang].mNames[m.typeIndex] || (m.isBoss ? i18n[curLang].bName : "Unknown");
         monsterEncyclopedia[mName] = (monsterEncyclopedia[mName] || 0) + 1;
         localStorage.setItem('rogue_encyclopedia', JSON.stringify(monsterEncyclopedia));
+        
+
+         // --- コレクションに追加 ---
+        const word = m.studyText;
+        if (!gameState.collection[word]) {
+            gameState.collection[word] = 0;
+        }
+        gameState.collection[word]++;
+        
+        // UIを更新
+        updateCollectionUI();
         
         if (Object.keys(monsterEncyclopedia).length >= 3) {
             checkAchievements();
@@ -488,7 +539,14 @@ function monstersTurn() {
             const dmg = Math.max(1, m.atk - Math.floor(Math.random()*3));
             gameState.player.hp -= dmg;
             playEffect(m.isBoss ? SOUND_DATA.BOSS_ATTACK : SOUND_DATA.ENEMY_ATTACK);
-            addLog('damaged', 'log-enemy', { nIsMonster: true, monsterObj: m, dmg: dmg });
+            
+            // --- ここをカスタマイズ ---
+            // ログに「問題」として単語とヒントを出す
+            addLog('enemyAttack', 'log-enemy', { 
+                studyText: m.studyText, 
+                firstChar: m.studyText.charAt(0), // 最初の1文字を渡す
+                dmg: dmg 
+            });            
             if (gameState.player.hp <= 0) endGame(false);
         } else {
             moveMonsterRandomly(m);
@@ -740,4 +798,37 @@ function updateHelpText() {
     if (helpTitle) helpTitle.textContent = T.helpTitle || "GUIDE";
     // i18nに新しく定義する helpContent を流し込む
     if (helpBody) helpBody.innerHTML = T.helpContent || T.gBody; 
+}
+
+async function loadStudyData() {
+    if (!CONFIG.STUDY_MODE.enabled) return;
+
+    try {
+        const response = await fetch(CONFIG.STUDY_MODE.jsonPath);
+        if (!response.ok) throw new Error("JSON load failed");
+        
+        const data = await response.json();
+        // グローバル変数にセット
+        EXAM_WORDS = data; 
+        console.log("OCRデータをロードしました:", EXAM_WORDS);
+    } catch (e) {
+        console.warn("暗記データの読み込みに失敗。デフォルト設定で続行します。");
+    }
+}
+
+function updateCollectionUI() {
+    const listDiv = document.getElementById('collection-list');
+    if (!listDiv) return;
+    listDiv.innerHTML = "";
+    
+    // --- 修正ポイント：ガード処理 ---
+    if (!gameState.collection || typeof gameState.collection !== 'object') return;
+
+    Object.keys(gameState.collection).sort().forEach(word => {
+        const item = document.createElement('div');
+        item.style.padding = "4px";
+        item.style.borderBottom = "1px solid #333";
+        item.textContent = `★ ${word} (${gameState.collection[word]})`;
+        listDiv.appendChild(item);
+    });
 }
